@@ -31,32 +31,37 @@ func Init(ctx context.Context) error {
 
 func ensureSchema(ctx context.Context) error {
 	_, err := Pool.Exec(ctx, `
-		CREATE TABLE IF NOT EXISTS prs (
-			id INTEGER PRIMARY KEY,
-			repo TEXT NOT NULL,
-			owner TEXT NOT NULL,
-			comment_count INTEGER NOT NULL,
-			lines_changed INTEGER NOT NULL,
-			created_at TIMESTAMPTZ NOT NULL
-		);
-	`)
+        CREATE TABLE IF NOT EXISTS prs (
+            id INTEGER PRIMARY KEY,
+            repo TEXT NOT NULL,
+            owner TEXT NOT NULL,
+            comment_count INTEGER NOT NULL,
+            bot_comments INTEGER NOT NULL DEFAULT 0,
+            lines_changed INTEGER NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL
+        );
+        ALTER TABLE prs
+            ADD COLUMN IF NOT EXISTS bot_comments INTEGER NOT NULL DEFAULT 0;
+    `)
 	return err
 }
 
 func InsertPRRow(ctx context.Context, row types.PRRow) error {
+	id := fmt.Sprintf("%d:%s:%s", row.ID, row.Owner, row.Repo)
 	_, err := Pool.Exec(ctx, `
-		INSERT INTO prs (id, owner, repo, comment_count, lines_changed, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6)
-		ON CONFLICT (id)
-		DO UPDATE SET
-			owner = EXCLUDED.owner,
-			repo = EXCLUDED.repo,
-			comment_count = EXCLUDED.comment_count,
-			lines_changed = EXCLUDED.lines_changed,
-			created_at = EXCLUDED.created_at;
-	`, row.ID, row.Owner, row.Repo, row.CommentCount, row.LinesChanged, row.CreatedAt)
+        INSERT INTO prs (id, owner, repo, comment_count, bot_comments, lines_changed, created_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        ON CONFLICT (id)
+        DO UPDATE SET
+            owner = EXCLUDED.owner,
+            repo = EXCLUDED.repo,
+            comment_count = EXCLUDED.comment_count,
+            bot_comments = EXCLUDED.bot_comments,
+            lines_changed = EXCLUDED.lines_changed,
+            created_at = EXCLUDED.created_at;
+    `, id, row.Owner, row.Repo, row.CommentCount, row.BotComments, row.LinesChanged, row.CreatedAt)
 	if err == nil {
-		log.Debug().Int("id", row.ID).Str("owner", row.Owner).Str("repo", row.Repo).Msg("inserted PR row")
+		log.Debug().Str("id", id).Str("owner", row.Owner).Str("repo", row.Repo).Msg("inserted PR row")
 	}
 	return err
 }

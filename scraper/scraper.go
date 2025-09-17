@@ -62,7 +62,14 @@ func Run(ctx context.Context, owner, repo string, concurrency int) error {
 					continue
 				}
 
-				row := buildPRRow(full, owner, repo, j.number)
+				// Compute comment breakdown (total and bot-only)
+				breakdown, berr := services.GetPRCommentsBreakdown(ctx, owner, repo, j.number)
+				if berr != nil {
+					results <- result{number: j.number, err: berr}
+					continue
+				}
+
+				row := buildPRRow(full, owner, repo, j.number, breakdown.TotalComments, breakdown.BotComments)
 
 				ins := false
 				if db.Pool != nil {
@@ -156,14 +163,7 @@ func Run(ctx context.Context, owner, repo string, concurrency int) error {
 	return nil
 }
 
-func buildPRRow(full *github.PullRequest, owner, repo string, number int) types.PRRow {
-	commentCount := 0
-	if full.Comments != nil {
-		commentCount += *full.Comments
-	}
-	if full.ReviewComments != nil {
-		commentCount += *full.ReviewComments
-	}
+func buildPRRow(full *github.PullRequest, owner, repo string, number int, commentCount int, botComments int) types.PRRow {
 
 	additions := 0
 	if full.Additions != nil {
@@ -185,6 +185,7 @@ func buildPRRow(full *github.PullRequest, owner, repo string, number int) types.
 		Repo:         repo,
 		Owner:        owner,
 		CommentCount: commentCount,
+		BotComments:  botComments,
 		LinesChanged: linesChanged,
 		CreatedAt:    createdAt,
 	}

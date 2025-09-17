@@ -205,3 +205,163 @@ func GetPRWithBackoff(ctx context.Context, owner, repo string, number int) (*git
 		return nil, err
 	}
 }
+
+// CommentsBreakdown holds counts for total comments and bot-only comments across
+// issue comments and review comments for a PR. "Comments" includes both types.
+type CommentsBreakdown struct {
+	TotalComments int
+	BotComments   int
+}
+
+// GetPRCommentsBreakdown returns total and bot comment counts for a PR by
+// fetching issue comments and review comments with pagination and robust
+// backoff handling.
+func GetPRCommentsBreakdown(ctx context.Context, owner, repo string, number int) (CommentsBreakdown, error) {
+	if GitHubClient == nil {
+		return CommentsBreakdown{}, errors.New("GitHub client not initialized")
+	}
+
+	var breakdown CommentsBreakdown
+
+	// Helper to determine if a comment user is a bot
+	isBot := func(u *github.User) bool {
+		if u == nil || u.Type == nil {
+			return false
+		}
+		return *u.Type == "Bot"
+	}
+
+	// Paginate Issue Comments (a.k.a. PR comments on the conversation tab)
+	issueOpts := &github.IssueListCommentsOptions{
+		ListOptions: github.ListOptions{PerPage: 100, Page: 1},
+	}
+	for {
+		var (
+			comments []*github.IssueComment
+			resp     *github.Response
+			err      error
+		)
+		for {
+			comments, resp, err = GitHubClient.Issues.ListComments(ctx, owner, repo, number, issueOpts)
+			if err == nil {
+				break
+			}
+			if rlErr, ok := err.(*github.RateLimitError); ok {
+				resetAt := rlErr.Rate.Reset.Time
+				sleepFor := time.Until(resetAt) + time.Second
+				if sleepFor < 0 {
+					sleepFor = 5 * time.Second
+				}
+				log.Warn().Int("number", number).Time("reset_at", resetAt).Dur("sleep_for", sleepFor).Msg("rate limit while listing issue comments; sleeping")
+				select {
+				case <-ctx.Done():
+					return CommentsBreakdown{}, ctx.Err()
+				case <-time.After(sleepFor):
+				}
+				continue
+			}
+			if abuseErr, ok := err.(*github.AbuseRateLimitError); ok {
+				var sleepFor time.Duration
+				if abuseErr.RetryAfter != nil {
+					sleepFor = *abuseErr.RetryAfter
+				} else {
+					sleepFor = 10 * time.Second
+				}
+				log.Warn().Int("number", number).Dur("sleep_for", sleepFor).Msg("abuse while listing issue comments; backing off")
+				select {
+				case <-ctx.Done():
+					return CommentsBreakdown{}, ctx.Err()
+				case <-time.After(sleepFor):
+				}
+				continue
+			}
+			if resp != nil && resp.Response != nil && resp.Response.StatusCode >= 500 {
+				log.Warn().Int("number", number).Int("status", resp.Response.StatusCode).Msg("server error listing issue comments; retrying")
+				select {
+				case <-ctx.Done():
+					return CommentsBreakdown{}, ctx.Err()
+				case <-time.After(3 * time.Second):
+				}
+				continue
+			}
+			return CommentsBreakdown{}, err
+		}
+		for _, c := range comments {
+			breakdown.TotalComments++
+			if isBot(c.User) {
+				breakdown.BotComments++
+			}
+		}
+		if resp == nil || resp.NextPage == 0 {
+			break
+		}
+		issueOpts.Page = resp.NextPage
+	}
+
+	// Paginate Review Comments (comments on diffs)
+	reviewOpts := &github.PullRequestListCommentsOptions{ListOptions: github.ListOptions{PerPage: 100, Page: 1}}
+	for {
+		var (
+			comments []*github.PullRequestComment
+			resp     *github.Response
+			err      error
+		)
+		for {
+			comments, resp, err = GitHubClient.PullRequests.ListComments(ctx, owner, repo, number, reviewOpts)
+			if err == nil {
+				break
+			}
+			if rlErr, ok := err.(*github.RateLimitError); ok {
+				resetAt := rlErr.Rate.Reset.Time
+				sleepFor := time.Until(resetAt) + time.Second
+				if sleepFor < 0 {
+					sleepFor = 5 * time.Second
+				}
+				log.Warn().Int("number", number).Time("reset_at", resetAt).Dur("sleep_for", sleepFor).Msg("rate limit while listing review comments; sleeping")
+				select {
+				case <-ctx.Done():
+					return CommentsBreakdown{}, ctx.Err()
+				case <-time.After(sleepFor):
+				}
+				continue
+			}
+			if abuseErr, ok := err.(*github.AbuseRateLimitError); ok {
+				var sleepFor time.Duration
+				if abuseErr.RetryAfter != nil {
+					sleepFor = *abuseErr.RetryAfter
+				} else {
+					sleepFor = 10 * time.Second
+				}
+				log.Warn().Int("number", number).Dur("sleep_for", sleepFor).Msg("abuse while listing review comments; backing off")
+				select {
+				case <-ctx.Done():
+					return CommentsBreakdown{}, ctx.Err()
+				case <-time.After(sleepFor):
+				}
+				continue
+			}
+			if resp != nil && resp.Response != nil && resp.Response.StatusCode >= 500 {
+				log.Warn().Int("number", number).Int("status", resp.Response.StatusCode).Msg("server error listing review comments; retrying")
+				select {
+				case <-ctx.Done():
+					return CommentsBreakdown{}, ctx.Err()
+				case <-time.After(3 * time.Second):
+				}
+				continue
+			}
+			return CommentsBreakdown{}, err
+		}
+		for _, c := range comments {
+			breakdown.TotalComments++
+			if isBot(c.User) {
+				breakdown.BotComments++
+			}
+		}
+		if resp == nil || resp.NextPage == 0 {
+			break
+		}
+		reviewOpts.Page = resp.NextPage
+	}
+
+	return breakdown, nil
+}

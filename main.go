@@ -43,6 +43,7 @@ func main() {
 
 	ctx := context.Background()
 	services.InitGitHub(ctx)
+	services.InitGitHubGraphQL(ctx)
 
 	if err := db.Init(ctx); err != nil {
 		log.Fatal().Err(err).Msg("failed to connect to Postgres")

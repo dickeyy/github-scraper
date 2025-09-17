@@ -28,17 +28,17 @@ func Run(ctx context.Context, owner, repo string, concurrency int) error {
 		concurrency = 1
 	}
 
-	prs, err := services.GetAllPRs(ctx, owner, repo)
+	// Fetch PR minimal details via GraphQL in bulk
+	lites, err := services.GetAllPRsGraphQL(ctx, owner, repo)
 	if err != nil {
 		return err
 	}
 
-	jobNumbers := make([]int, 0, len(prs))
-	for _, pr := range prs {
-		if pr == nil || pr.Number == nil {
-			continue
-		}
-		jobNumbers = append(jobNumbers, *pr.Number)
+	jobNumbers := make([]int, 0, len(lites))
+	liteMap := make(map[int]services.PRLite, len(lites))
+	for _, pr := range lites {
+		jobNumbers = append(jobNumbers, pr.Number)
+		liteMap[pr.Number] = pr
 	}
 	total := len(jobNumbers)
 	log.Info().Str("owner", owner).Str("repo", repo).Int("total_prs", total).Msg("ready to process PRs")
@@ -66,11 +66,7 @@ func Run(ctx context.Context, owner, repo string, concurrency int) error {
 	for w := 0; w < concurrency; w++ {
 		go func() {
 			for j := range jobs {
-				full, err := services.GetPRWithBackoff(ctx, owner, repo, j.number)
-				if err != nil {
-					results <- result{number: j.number, err: err}
-					continue
-				}
+				// We no longer need full PR REST call; using lite + comments
 
 				// Get breakdown from preloaded map if available, else compute per-PR
 				breakdown, ok := repoBreakdowns[j.number]
@@ -83,7 +79,22 @@ func Run(ctx context.Context, owner, repo string, concurrency int) error {
 					}
 				}
 
-				row := buildPRRow(full, owner, repo, j.number, breakdown.TotalComments, breakdown.BotComments)
+				// Build row using GraphQL lites for lines changed & createdAt
+				lite := liteMap[j.number]
+				createdAt := lite.CreatedAt
+				additions := lite.Additions
+				deletions := lite.Deletions
+				linesChanged := additions + deletions
+
+				row := types.PRRow{
+					ID:           j.number,
+					Repo:         repo,
+					Owner:        owner,
+					CommentCount: breakdown.TotalComments,
+					BotComments:  breakdown.BotComments,
+					LinesChanged: linesChanged,
+					CreatedAt:    createdAt,
+				}
 
 				ins := false
 				if db.Pool != nil {

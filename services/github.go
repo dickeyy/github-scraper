@@ -10,11 +10,13 @@ import (
 
 	"github.com/google/go-github/v74/github"
 	"github.com/rs/zerolog/log"
+	githubv4 "github.com/shurcooL/githubv4"
 	"golang.org/x/oauth2"
 )
 
 var (
-	GitHubClient *github.Client
+	GitHubClient        *github.Client
+	GitHubGraphQLClient *githubv4.Client
 )
 
 func InitGitHub(ctx context.Context) {
@@ -29,6 +31,21 @@ func InitGitHub(ctx context.Context) {
 
 	GitHubClient = github.NewClient(nil)
 	log.Info().Bool("token_present", false).Msg("GitHub client initialized")
+}
+
+// InitGitHubGraphQL initializes the GraphQL client using the same token env var.
+func InitGitHubGraphQL(ctx context.Context) {
+	token := os.Getenv("GITHUB_TOKEN")
+	if token != "" {
+		ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
+		tc := oauth2.NewClient(ctx, ts)
+		GitHubGraphQLClient = githubv4.NewClient(tc)
+		log.Info().Bool("token_present", true).Msg("GitHub GraphQL client initialized")
+		return
+	}
+
+	GitHubGraphQLClient = githubv4.NewClient(nil)
+	log.Info().Bool("token_present", false).Msg("GitHub GraphQL client initialized")
 }
 
 func GetPRs(ctx context.Context, owner, repo string) ([]*github.PullRequest, error) {
@@ -213,6 +230,81 @@ func GetPRWithBackoff(ctx context.Context, owner, repo string, number int) (*git
 type CommentsBreakdown struct {
 	TotalComments int
 	BotComments   int
+}
+
+// PRLite contains minimal PR details we need for rows
+type PRLite struct {
+	Number    int
+	Additions int
+	Deletions int
+	CreatedAt time.Time
+}
+
+// GetAllPRsGraphQL fetches PR numbers and selected fields in bulk using
+// GitHub GraphQL API. It paginates through up to the repo's PR count.
+// It returns newest-first, matching our current sort order.
+func GetAllPRsGraphQL(ctx context.Context, owner, repo string) ([]PRLite, error) {
+	if GitHubGraphQLClient == nil {
+		return nil, errors.New("GitHub GraphQL client not initialized")
+	}
+
+	type prNode struct {
+		Number    int
+		Additions int
+		Deletions int
+		CreatedAt time.Time
+	}
+	var q struct {
+		Repository struct {
+			PullRequests struct {
+				PageInfo struct {
+					HasNextPage bool
+					EndCursor   githubv4.String
+				}
+				Nodes []prNode
+			} `graphql:"pullRequests(first: $pageSize, after: $cursor, orderBy: {field: CREATED_AT, direction: DESC}, states: [OPEN, CLOSED, MERGED])"`
+		} `graphql:"repository(owner: $owner, name: $name)"`
+	}
+
+	vars := map[string]interface{}{
+		"owner":    githubv4.String(owner),
+		"name":     githubv4.String(repo),
+		"pageSize": githubv4.Int(100),
+		"cursor":   (*githubv4.String)(nil),
+	}
+
+	var results []PRLite
+	for {
+		if err := GitHubGraphQLClient.Query(ctx, &q, vars); err != nil {
+			// backoff on rate limits or abuse
+			if strings.Contains(err.Error(), "rate limit") {
+				sleepFor := 15 * time.Second
+				log.Warn().Dur("sleep_for", sleepFor).Msg("GraphQL rate limit; sleeping")
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				case <-time.After(sleepFor):
+				}
+				continue
+			}
+			return nil, err
+		}
+		for _, n := range q.Repository.PullRequests.Nodes {
+			results = append(results, PRLite{
+				Number:    n.Number,
+				Additions: n.Additions,
+				Deletions: n.Deletions,
+				CreatedAt: n.CreatedAt,
+			})
+		}
+		if !q.Repository.PullRequests.PageInfo.HasNextPage {
+			break
+		}
+		vars["cursor"] = q.Repository.PullRequests.PageInfo.EndCursor
+	}
+
+	log.Info().Str("owner", owner).Str("repo", repo).Int("total", len(results)).Msg("GraphQL fetched PR lites")
+	return results, nil
 }
 
 // GetPRCommentsBreakdown returns total and bot comment counts for a PR by

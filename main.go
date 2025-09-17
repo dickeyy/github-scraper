@@ -26,13 +26,11 @@ func main() {
 	var (
 		owner       string
 		repo        string
-		dbURL       string
 		concurrency int
 	)
 
 	flag.StringVar(&owner, "owner", "", "GitHub repository owner/org")
 	flag.StringVar(&repo, "repo", "", "GitHub repository name")
-	flag.StringVar(&dbURL, "db", os.Getenv("DATABASE_URL"), "Postgres connection string (or set DATABASE_URL)")
 	flag.IntVar(&concurrency, "concurrency", 4, "Number of workers for detail fetch + insert")
 	flag.Parse()
 
@@ -43,7 +41,7 @@ func main() {
 	ctx := context.Background()
 	services.InitGitHub(ctx)
 
-	if err := db.Init(ctx, dbURL); err != nil {
+	if err := db.Init(ctx); err != nil {
 		log.Fatal().Err(err).Msg("failed to connect to Postgres")
 	}
 	defer db.Close()

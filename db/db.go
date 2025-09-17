@@ -2,6 +2,8 @@ package db
 
 import (
 	"context"
+	"fmt"
+	"os"
 
 	"github.com/dickeyy/github-scraper/types"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -12,7 +14,8 @@ var (
 	Pool *pgxpool.Pool
 )
 
-func Init(ctx context.Context, connString string) error {
+func Init(ctx context.Context) error {
+	connString := fmt.Sprintf("postgres://%s:%s@%s:%s/%s", os.Getenv("POSTGRES_USER"), os.Getenv("POSTGRES_PASSWORD"), os.Getenv("POSTGRES_HOST"), os.Getenv("POSTGRES_PORT"), os.Getenv("POSTGRES_DB"))
 	pool, err := pgxpool.New(ctx, connString)
 	if err != nil {
 		return err

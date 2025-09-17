@@ -57,9 +57,12 @@ func Run(ctx context.Context, owner, repo string, concurrency int) error {
 	for _, n := range jobNumbers {
 		prSet[n] = struct{}{}
 	}
+	log.Info().Str("owner", owner).Str("repo", repo).Int("total", total).Msg("preloading repo-level comment breakdowns")
 	repoBreakdowns, err := services.GetRepoCommentsBreakdown(ctx, owner, repo, prSet)
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to preload repo-level comment breakdowns; falling back to per-PR calls")
+	} else {
+		log.Info().Str("owner", owner).Str("repo", repo).Int("covered", len(repoBreakdowns)).Int("total", total).Msg("repo-level comment breakdowns loaded")
 	}
 
 	// Workers

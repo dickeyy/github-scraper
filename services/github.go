@@ -617,6 +617,12 @@ func GetRepoCommentsBreakdown(ctx context.Context, owner, repo string, prNumberS
 				}
 			}
 		}
+		log.Info().Str("owner", owner).Str("repo", repo).Int("issue_comments_page", issPage).Int("fetched", len(comments)).Int("next_page", func() int {
+			if resp == nil {
+				return 0
+			}
+			return resp.NextPage
+		}()).Msg("fetched repo issue comments page")
 		if resp == nil || resp.NextPage == 0 {
 			break
 		}
@@ -721,6 +727,12 @@ func GetRepoCommentsBreakdown(ctx context.Context, owner, repo string, prNumberS
 			}
 		}
 
+		log.Info().Str("owner", owner).Str("repo", repo).Int("review_comments_page", revPage).Int("fetched", len(comments)).Int("next_page", func() int {
+			if resp == nil {
+				return 0
+			}
+			return resp.NextPage
+		}()).Msg("fetched repo review comments page")
 		if resp == nil || resp.NextPage == 0 {
 			break
 		}

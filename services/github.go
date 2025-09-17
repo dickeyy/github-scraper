@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/go-github/v74/github"
@@ -364,4 +366,216 @@ func GetPRCommentsBreakdown(ctx context.Context, owner, repo string, number int)
 	}
 
 	return breakdown, nil
+}
+
+// GetRepoCommentsBreakdown aggregates comment counts for all PRs in the given
+// set by scanning repository-level endpoints, drastically reducing request
+// volume compared to per-PR calls. If prNumberSet is nil or empty, all
+// comments will be scanned but none will be recorded.
+func GetRepoCommentsBreakdown(ctx context.Context, owner, repo string, prNumberSet map[int]struct{}) (map[int]CommentsBreakdown, error) {
+	if GitHubClient == nil {
+		return nil, errors.New("GitHub client not initialized")
+	}
+
+	breakdowns := make(map[int]CommentsBreakdown)
+
+	// Helper to determine if a comment user is a bot
+	isBot := func(u *github.User) bool {
+		if u == nil || u.Type == nil {
+			return false
+		}
+		return *u.Type == "Bot"
+	}
+
+	// Helper to record counts for a PR
+	record := func(prNumber int, bot bool) {
+		if _, ok := prNumberSet[prNumber]; !ok {
+			return
+		}
+		bd := breakdowns[prNumber]
+		bd.TotalComments++
+		if bot {
+			bd.BotComments++
+		}
+		breakdowns[prNumber] = bd
+	}
+
+	// Extract trailing integer from a URL/path string
+	extractTrailingInt := func(s string) (int, bool) {
+		if s == "" {
+			return 0, false
+		}
+		// Trim query/fragment
+		if idx := strings.IndexByte(s, '?'); idx >= 0 {
+			s = s[:idx]
+		}
+		if idx := strings.IndexByte(s, '#'); idx >= 0 {
+			s = s[:idx]
+		}
+		parts := strings.Split(strings.TrimRight(s, "/"), "/")
+		if len(parts) == 0 {
+			return 0, false
+		}
+		last := parts[len(parts)-1]
+		n, err := strconv.Atoi(last)
+		if err != nil {
+			return 0, false
+		}
+		return n, true
+	}
+
+	// 1) Repository-level Issue Comments
+	issPage := 1
+	for {
+		endpoint := strings.Builder{}
+		endpoint.WriteString("repos/")
+		endpoint.WriteString(owner)
+		endpoint.WriteString("/")
+		endpoint.WriteString(repo)
+		endpoint.WriteString("/issues/comments?per_page=100&page=")
+		endpoint.WriteString(strconv.Itoa(issPage))
+
+		req, err := GitHubClient.NewRequest("GET", endpoint.String(), nil)
+		if err != nil {
+			return nil, err
+		}
+		var comments []*github.IssueComment
+		resp, err := GitHubClient.Do(ctx, req, &comments)
+		if err != nil {
+			if rlErr, ok := err.(*github.RateLimitError); ok {
+				resetAt := rlErr.Rate.Reset.Time
+				sleepFor := time.Until(resetAt) + time.Second
+				if sleepFor < 0 {
+					sleepFor = 5 * time.Second
+				}
+				log.Warn().Dur("sleep_for", sleepFor).Msg("rate limit while listing repo issue comments; sleeping")
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				case <-time.After(sleepFor):
+				}
+				continue
+			}
+			if abuseErr, ok := err.(*github.AbuseRateLimitError); ok {
+				var sleepFor time.Duration
+				if abuseErr.RetryAfter != nil {
+					sleepFor = *abuseErr.RetryAfter
+				} else {
+					sleepFor = 10 * time.Second
+				}
+				log.Warn().Dur("sleep_for", sleepFor).Msg("abuse while listing repo issue comments; backing off")
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				case <-time.After(sleepFor):
+				}
+				continue
+			}
+			// Non-2xx or other errors; small backoff and retry
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(3 * time.Second):
+			}
+			continue
+		}
+		for _, c := range comments {
+			if c == nil || c.User == nil {
+				continue
+			}
+			// Comment belongs to an issue number
+			if c.IssueURL != nil {
+				if n, ok := extractTrailingInt(*c.IssueURL); ok {
+					record(n, isBot(c.User))
+				}
+			}
+		}
+		if resp == nil || resp.NextPage == 0 {
+			break
+		}
+		issPage = resp.NextPage
+	}
+
+	// 2) Repository-level Review Comments (code comments)
+	// Use a manual request as the go-github method for repo-level review comments may not be exposed.
+	revPage := 1
+	for {
+		endpoint := strings.Builder{}
+		endpoint.WriteString("repos/")
+		endpoint.WriteString(owner)
+		endpoint.WriteString("/")
+		endpoint.WriteString(repo)
+		endpoint.WriteString("/pulls/comments?per_page=100&page=")
+		endpoint.WriteString(strconv.Itoa(revPage))
+
+		req, err := GitHubClient.NewRequest("GET", endpoint.String(), nil)
+		if err != nil {
+			return nil, err
+		}
+		var comments []*github.PullRequestComment
+		resp, err := GitHubClient.Do(ctx, req, &comments)
+		if err != nil {
+			if rlErr, ok := err.(*github.RateLimitError); ok {
+				resetAt := rlErr.Rate.Reset.Time
+				sleepFor := time.Until(resetAt) + time.Second
+				if sleepFor < 0 {
+					sleepFor = 5 * time.Second
+				}
+				log.Warn().Dur("sleep_for", sleepFor).Msg("rate limit while listing repo review comments; sleeping")
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				case <-time.After(sleepFor):
+				}
+				continue
+			}
+			if abuseErr, ok := err.(*github.AbuseRateLimitError); ok {
+				var sleepFor time.Duration
+				if abuseErr.RetryAfter != nil {
+					sleepFor = *abuseErr.RetryAfter
+				} else {
+					sleepFor = 10 * time.Second
+				}
+				log.Warn().Dur("sleep_for", sleepFor).Msg("abuse while listing repo review comments; backing off")
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				case <-time.After(sleepFor):
+				}
+				continue
+			}
+			// Non-2xx handled above; 5xx may not be parsed to Response; retry basic backoff
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(3 * time.Second):
+			}
+			continue
+		}
+
+		for _, c := range comments {
+			if c == nil || c.User == nil {
+				continue
+			}
+			// Prefer PullRequestURL to extract PR number; fallback to HTMLURL
+			var prNumber int
+			var ok bool
+			if c.PullRequestURL != nil {
+				prNumber, ok = extractTrailingInt(*c.PullRequestURL)
+			}
+			if !ok && c.HTMLURL != nil {
+				prNumber, ok = extractTrailingInt(*c.HTMLURL)
+			}
+			if ok {
+				record(prNumber, isBot(c.User))
+			}
+		}
+
+		if resp == nil || resp.NextPage == 0 {
+			break
+		}
+		revPage = resp.NextPage
+	}
+
+	return breakdowns, nil
 }

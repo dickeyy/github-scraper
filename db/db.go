@@ -32,7 +32,7 @@ func Init(ctx context.Context) error {
 func ensureSchema(ctx context.Context) error {
 	_, err := Pool.Exec(ctx, `
         CREATE TABLE IF NOT EXISTS prs (
-            id INTEGER PRIMARY KEY,
+            id TEXT PRIMARY KEY,
             repo TEXT NOT NULL,
             owner TEXT NOT NULL,
             comment_count INTEGER NOT NULL,
@@ -40,8 +40,6 @@ func ensureSchema(ctx context.Context) error {
             lines_changed INTEGER NOT NULL,
             created_at TIMESTAMPTZ NOT NULL
         );
-        ALTER TABLE prs
-            ADD COLUMN IF NOT EXISTS bot_comments INTEGER NOT NULL DEFAULT 0;
     `)
 	return err
 }

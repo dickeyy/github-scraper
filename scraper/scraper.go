@@ -52,6 +52,16 @@ func Run(ctx context.Context, owner, repo string, concurrency int) error {
 	var inserted atomic.Int64
 	var errs atomic.Int64
 
+	// Preload repo-level comments breakdown to reduce API calls
+	prSet := make(map[int]struct{}, len(jobNumbers))
+	for _, n := range jobNumbers {
+		prSet[n] = struct{}{}
+	}
+	repoBreakdowns, err := services.GetRepoCommentsBreakdown(ctx, owner, repo, prSet)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to preload repo-level comment breakdowns; falling back to per-PR calls")
+	}
+
 	// Workers
 	for w := 0; w < concurrency; w++ {
 		go func() {
@@ -62,11 +72,15 @@ func Run(ctx context.Context, owner, repo string, concurrency int) error {
 					continue
 				}
 
-				// Compute comment breakdown (total and bot-only)
-				breakdown, berr := services.GetPRCommentsBreakdown(ctx, owner, repo, j.number)
-				if berr != nil {
-					results <- result{number: j.number, err: berr}
-					continue
+				// Get breakdown from preloaded map if available, else compute per-PR
+				breakdown, ok := repoBreakdowns[j.number]
+				if !ok {
+					var berr error
+					breakdown, berr = services.GetPRCommentsBreakdown(ctx, owner, repo, j.number)
+					if berr != nil {
+						results <- result{number: j.number, err: berr}
+						continue
+					}
 				}
 
 				row := buildPRRow(full, owner, repo, j.number, breakdown.TotalComments, breakdown.BotComments)

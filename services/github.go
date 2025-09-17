@@ -275,19 +275,31 @@ func GetAllPRsGraphQL(ctx context.Context, owner, repo string) ([]PRLite, error)
 
 	var results []PRLite
 	for {
-		if err := GitHubGraphQLClient.Query(ctx, &q, vars); err != nil {
-			// backoff on rate limits or abuse
-			if strings.Contains(err.Error(), "rate limit") {
-				sleepFor := 15 * time.Second
-				log.Warn().Dur("sleep_for", sleepFor).Msg("GraphQL rate limit; sleeping")
-				select {
-				case <-ctx.Done():
-					return nil, ctx.Err()
-				case <-time.After(sleepFor):
-				}
-				continue
+		// Retry wrapper for GraphQL Query
+		var attempt int
+		for {
+			attempt++
+			err := GitHubGraphQLClient.Query(ctx, &q, vars)
+			if err == nil {
+				break
 			}
-			return nil, err
+			// rate limit or transient 5xx
+			transient := strings.Contains(err.Error(), "rate limit") || strings.Contains(err.Error(), "502") || strings.Contains(err.Error(), "503") || strings.Contains(err.Error(), "504")
+			if !transient || attempt >= 6 { // ~6 attempts
+				return nil, err
+			}
+			// exp backoff with jitter
+			base := time.Duration(500*(1<<uint(attempt-1))) * time.Millisecond
+			if base > 10*time.Second {
+				base = 10 * time.Second
+			}
+			sleepFor := base + time.Duration(int64(time.Millisecond)*int64(100*attempt))
+			log.Warn().Int("attempt", attempt).Dur("sleep_for", sleepFor).Msg("GraphQL transient error; backing off")
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(sleepFor):
+			}
 		}
 		for _, n := range q.Repository.PullRequests.Nodes {
 			results = append(results, PRLite{
@@ -527,14 +539,37 @@ func GetRepoCommentsBreakdown(ctx context.Context, owner, repo string, prNumberS
 		endpoint.WriteString("/issues/comments?per_page=100&page=")
 		endpoint.WriteString(strconv.Itoa(issPage))
 
-		req, err := GitHubClient.NewRequest("GET", endpoint.String(), nil)
-		if err != nil {
-			return nil, err
+		req, reqErr := GitHubClient.NewRequest("GET", endpoint.String(), nil)
+		if reqErr != nil {
+			return nil, reqErr
 		}
 		var comments []*github.IssueComment
-		resp, err := GitHubClient.Do(ctx, req, &comments)
-		if err != nil {
-			if rlErr, ok := err.(*github.RateLimitError); ok {
+		// Retry wrapper for repo issue comments
+		var resp *github.Response
+		var doErr error
+		for attempt := 1; ; attempt++ {
+			resp, doErr = GitHubClient.Do(ctx, req, &comments)
+			if doErr == nil {
+				break
+			}
+			transient := strings.Contains(doErr.Error(), "502") || strings.Contains(doErr.Error(), "503") || strings.Contains(doErr.Error(), "504")
+			if !transient || attempt >= 6 {
+				break
+			}
+			base := time.Duration(500*(1<<uint(attempt-1))) * time.Millisecond
+			if base > 10*time.Second {
+				base = 10 * time.Second
+			}
+			sleepFor := base + time.Duration(int64(time.Millisecond)*int64(100*attempt))
+			log.Warn().Int("attempt", attempt).Dur("sleep_for", sleepFor).Msg("transient 5xx for repo issue comments; backing off")
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(sleepFor):
+			}
+		}
+		if doErr != nil {
+			if rlErr, ok := doErr.(*github.RateLimitError); ok {
 				resetAt := rlErr.Rate.Reset.Time
 				sleepFor := time.Until(resetAt) + time.Second
 				if sleepFor < 0 {
@@ -548,7 +583,7 @@ func GetRepoCommentsBreakdown(ctx context.Context, owner, repo string, prNumberS
 				}
 				continue
 			}
-			if abuseErr, ok := err.(*github.AbuseRateLimitError); ok {
+			if abuseErr, ok := doErr.(*github.AbuseRateLimitError); ok {
 				var sleepFor time.Duration
 				if abuseErr.RetryAfter != nil {
 					sleepFor = *abuseErr.RetryAfter
@@ -600,14 +635,37 @@ func GetRepoCommentsBreakdown(ctx context.Context, owner, repo string, prNumberS
 		endpoint.WriteString("/pulls/comments?per_page=100&page=")
 		endpoint.WriteString(strconv.Itoa(revPage))
 
-		req, err := GitHubClient.NewRequest("GET", endpoint.String(), nil)
-		if err != nil {
-			return nil, err
+		req, reqErr := GitHubClient.NewRequest("GET", endpoint.String(), nil)
+		if reqErr != nil {
+			return nil, reqErr
 		}
 		var comments []*github.PullRequestComment
-		resp, err := GitHubClient.Do(ctx, req, &comments)
-		if err != nil {
-			if rlErr, ok := err.(*github.RateLimitError); ok {
+		// Retry wrapper for repo review comments
+		var resp *github.Response
+		var doErr error
+		for attempt := 1; ; attempt++ {
+			resp, doErr = GitHubClient.Do(ctx, req, &comments)
+			if doErr == nil {
+				break
+			}
+			transient := strings.Contains(doErr.Error(), "502") || strings.Contains(doErr.Error(), "503") || strings.Contains(doErr.Error(), "504")
+			if !transient || attempt >= 6 {
+				break
+			}
+			base := time.Duration(500*(1<<uint(attempt-1))) * time.Millisecond
+			if base > 10*time.Second {
+				base = 10 * time.Second
+			}
+			sleepFor := base + time.Duration(int64(time.Millisecond)*int64(100*attempt))
+			log.Warn().Int("attempt", attempt).Dur("sleep_for", sleepFor).Msg("transient 5xx for repo review comments; backing off")
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(sleepFor):
+			}
+		}
+		if doErr != nil {
+			if rlErr, ok := doErr.(*github.RateLimitError); ok {
 				resetAt := rlErr.Rate.Reset.Time
 				sleepFor := time.Until(resetAt) + time.Second
 				if sleepFor < 0 {
@@ -621,7 +679,7 @@ func GetRepoCommentsBreakdown(ctx context.Context, owner, repo string, prNumberS
 				}
 				continue
 			}
-			if abuseErr, ok := err.(*github.AbuseRateLimitError); ok {
+			if abuseErr, ok := doErr.(*github.AbuseRateLimitError); ok {
 				var sleepFor time.Duration
 				if abuseErr.RetryAfter != nil {
 					sleepFor = *abuseErr.RetryAfter

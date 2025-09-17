@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"os"
+	t "time"
 
 	"github.com/dickeyy/github-scraper/db"
 	"github.com/dickeyy/github-scraper/scraper"
@@ -27,11 +28,13 @@ func main() {
 		owner       string
 		repo        string
 		concurrency int
+		time        bool
 	)
 
 	flag.StringVar(&owner, "owner", "", "GitHub repository owner/org")
 	flag.StringVar(&repo, "repo", "", "GitHub repository name")
 	flag.IntVar(&concurrency, "concurrency", 4, "Number of workers for detail fetch + insert")
+	flag.BoolVar(&time, "time", false, "Time the scraper")
 	flag.Parse()
 
 	if owner == "" || repo == "" {
@@ -46,7 +49,16 @@ func main() {
 	}
 	defer db.Close()
 
+	var start t.Time
+	if time {
+		start = t.Now()
+	}
+
 	if err := scraper.Run(ctx, owner, repo, concurrency); err != nil {
 		log.Fatal().Err(err).Msg("scrape failed")
+	}
+
+	if time {
+		log.Info().Int64("duration_ms", t.Since(start).Milliseconds()).Float64("duration_s", t.Since(start).Seconds()).Msg("scrape completed")
 	}
 }

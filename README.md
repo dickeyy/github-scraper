@@ -30,7 +30,7 @@ Required by the app:
 
 When using Docker Compose, `docker-compose.yml` will read these env vars for the Postgres container as well. You may put them in a `.env` file (Compose automatically loads `.env`), or export them in your shell before running Compose.
 
-Example `.env.local` (used by the Go app):
+Example `.env` (used by the Go app):
 
 ```env
 POSTGRES_HOST=localhost
@@ -47,6 +47,7 @@ Example `.env` (used by Docker Compose):
 POSTGRES_DB=scraper
 POSTGRES_USER=postgres
 POSTGRES_PASSWORD=postgres
+POSTGRES_PORT=5432
 ```
 
 ## Database (Docker Compose)

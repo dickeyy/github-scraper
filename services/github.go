@@ -248,6 +248,8 @@ func GetAllPRsGraphQL(ctx context.Context, owner, repo string) ([]PRLite, error)
 		return nil, errors.New("GitHub GraphQL client not initialized")
 	}
 
+	log.Info().Str("owner", owner).Str("repo", repo).Msg("fetching PRs via GraphQL")
+
 	type prNode struct {
 		Number    int
 		Additions int

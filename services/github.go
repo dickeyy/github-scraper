@@ -237,6 +237,7 @@ type PRLite struct {
 	Number    int
 	Additions int
 	Deletions int
+	State     string
 	CreatedAt time.Time
 }
 
@@ -254,6 +255,7 @@ func GetAllPRsGraphQL(ctx context.Context, owner, repo string) ([]PRLite, error)
 		Number    int
 		Additions int
 		Deletions int
+		State     string
 		CreatedAt time.Time
 	}
 	var q struct {
@@ -308,6 +310,7 @@ func GetAllPRsGraphQL(ctx context.Context, owner, repo string) ([]PRLite, error)
 				Number:    n.Number,
 				Additions: n.Additions,
 				Deletions: n.Deletions,
+				State:     n.State,
 				CreatedAt: n.CreatedAt,
 			})
 		}

@@ -2,6 +2,7 @@ package scraper
 
 import (
 	"context"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -96,6 +97,7 @@ func Run(ctx context.Context, owner, repo string, concurrency int) error {
 					CommentCount: breakdown.TotalComments,
 					BotComments:  breakdown.BotComments,
 					LinesChanged: linesChanged,
+					Status:       strings.ToLower(lite.State),
 					CreatedAt:    createdAt,
 				}
 

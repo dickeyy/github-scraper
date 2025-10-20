@@ -9,5 +9,6 @@ type PRRow struct {
 	CommentCount int       `json:"comment_count"`
 	BotComments  int       `json:"bot_comments"`
 	LinesChanged int       `json:"lines_changed"`
+	Status       string    `json:"status"`
 	CreatedAt    time.Time `json:"created_at"`
 }

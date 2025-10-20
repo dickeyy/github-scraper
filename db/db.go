@@ -38,6 +38,7 @@ func ensureSchema(ctx context.Context) error {
             comment_count INTEGER NOT NULL,
             bot_comments INTEGER NOT NULL DEFAULT 0,
             lines_changed INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'open',
             created_at TIMESTAMPTZ NOT NULL
         );
     `)
@@ -47,8 +48,8 @@ func ensureSchema(ctx context.Context) error {
 func InsertPRRow(ctx context.Context, row types.PRRow) error {
 	id := fmt.Sprintf("%d:%s:%s", row.ID, row.Owner, row.Repo)
 	_, err := Pool.Exec(ctx, `
-        INSERT INTO prs (id, owner, repo, comment_count, bot_comments, lines_changed, created_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        INSERT INTO prs (id, owner, repo, comment_count, bot_comments, lines_changed, status, created_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         ON CONFLICT (id)
         DO UPDATE SET
             owner = EXCLUDED.owner,
@@ -56,8 +57,9 @@ func InsertPRRow(ctx context.Context, row types.PRRow) error {
             comment_count = EXCLUDED.comment_count,
             bot_comments = EXCLUDED.bot_comments,
             lines_changed = EXCLUDED.lines_changed,
+            status = EXCLUDED.status,
             created_at = EXCLUDED.created_at;
-    `, id, row.Owner, row.Repo, row.CommentCount, row.BotComments, row.LinesChanged, row.CreatedAt)
+    `, id, row.Owner, row.Repo, row.CommentCount, row.BotComments, row.LinesChanged, row.Status, row.CreatedAt)
 	if err == nil {
 		log.Debug().Str("id", id).Str("owner", row.Owner).Str("repo", row.Repo).Msg("inserted PR row")
 	}

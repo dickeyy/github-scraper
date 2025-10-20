@@ -5,5 +5,6 @@ CREATE TABLE IF NOT EXISTS prs (
     comment_count INTEGER NOT NULL,
     bot_comments INTEGER NOT NULL DEFAULT 0,
     lines_changed INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open',
     created_at TIMESTAMPTZ NOT NULL
 );

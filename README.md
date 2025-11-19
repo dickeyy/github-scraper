@@ -9,6 +9,10 @@ A small Go tool that fetches all pull requests for a given GitHub repository and
 - Concurrent detail fetch and insert into Postgres
 - Structured logging with zerolog
 
+## Dataset
+
+The dataset that we generated is available [here](./scraped_data/prs.csv). This is the dataset that we used in our paper.
+
 ## Prerequisites
 
 - Go (to run locally) – see `go.mod` for version
